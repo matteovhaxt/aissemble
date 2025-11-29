@@ -56,6 +56,11 @@ export const steps = pgTable(
     notes: text("notes"),
     illustrationKey: text("illustration_key"),
     illustrationUrl: text("illustration_url"),
+    animationStatus: text("animation_status"),
+    animationOperationId: text("animation_operation_id"),
+    animationKey: text("animation_key"),
+    animationUrl: text("animation_url"),
+    animationError: text("animation_error"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

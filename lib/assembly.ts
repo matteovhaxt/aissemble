@@ -1,6 +1,7 @@
 import { google } from "@ai-sdk/google";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
+import { startVeoAnimation } from "./veo";
 
 const assemblyStepSchema = z.object({
   id: z.string(),
@@ -16,9 +17,24 @@ const assemblyPlanSchema = z.object({
 });
 
 type AssemblyPlan = z.infer<typeof assemblyPlanSchema>;
-type IllustratedStep = AssemblyPlan["steps"][number] & {
-  illustration?: string;
+export type StepAnimationStatus =
+  | "pending"
+  | "processing"
+  | "succeeded"
+  | "failed";
+
+export type StepAnimationState = {
+  animationStatus?: StepAnimationStatus | null;
+  animationOperationId?: string | null;
+  animationUrl?: string | null;
+  animationKey?: string | null;
+  animationError?: string | null;
 };
+
+type IllustratedStep = AssemblyPlan["steps"][number] &
+  StepAnimationState & {
+    illustration?: string;
+  };
 
 export type IllustratedAssemblyPlan = Omit<AssemblyPlan, "steps"> & {
   steps: IllustratedStep[];
@@ -145,4 +161,43 @@ export async function generateStepIllustration(
   }
 
   return;
+}
+
+type StepAnimationArgs = {
+  step: AssemblyPlan["steps"][number];
+  index: number;
+  totalSteps: number;
+  context: PlanContext;
+  illustration: string;
+};
+
+export async function startStepAnimation({
+  step,
+  index,
+  totalSteps,
+  context,
+  illustration,
+}: StepAnimationArgs): Promise<{ operationId: string }> {
+  return await startVeoAnimation({
+    prompt: buildAnimationPrompt(step, index, totalSteps, context),
+    imageDataUrl: illustration,
+  });
+}
+
+function buildAnimationPrompt(
+  step: AssemblyPlan["steps"][number],
+  index: number,
+  totalSteps: number,
+  context: PlanContext
+) {
+  return [
+    "Create a smooth IKEA-style instructional animation from the provided line art reference.",
+    `Overall project: ${context.requestSummary}`,
+    `Current step (${index + 1}/${totalSteps}): ${step.title}`,
+    `Step details: ${step.description}`,
+    step.notes ? `Additional notes: ${step.notes}` : "",
+    "Keep the animation simple, clear, and focused on the assembly motion without adding text.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

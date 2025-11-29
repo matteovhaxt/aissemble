@@ -11,8 +11,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import type { StepAnimationStatus } from "@/lib/assembly";
 import { getPlanWithSteps } from "@/lib/db/queries";
-import { downloadObjectAsDataUrl } from "@/lib/storage";
+import { downloadObjectAsDataUrl, getSignedObjectUrl } from "@/lib/storage";
 import {
   type PlanStep,
   PlanStepNavigator,
@@ -35,10 +36,10 @@ export default async function PlanPage({ searchParams }: PlanPageProps) {
     notFound();
   }
 
-  const stepsWithIllustrations = await resolveStepIllustrations(data.steps);
+  const stepsWithAssets = await resolveStepAssets(data.steps);
   const onboardingSteps = buildOnboardingSteps(
     data.plan.checklist ?? [],
-    stepsWithIllustrations
+    stepsWithAssets
   );
   const attachmentDetails = await resolveAttachmentPreview(
     data.plan.upload ?? null,
@@ -57,7 +58,7 @@ export default async function PlanPage({ searchParams }: PlanPageProps) {
           <h1 className="font-semibold text-3xl">
             {data.plan.project ?? "Assembly plan"}
           </h1>
-          <p className="text-muted-foreground text-sm">
+          <p className="text-muted-foreground text-sm" suppressHydrationWarning>
             Requested {createdLabel}
           </p>
         </div>
@@ -129,36 +130,66 @@ function resolvePlanId(idParam: string | undefined): number {
 }
 
 type DbPlanStep = {
+  databaseId: number;
   id: string | number | null;
   title: string;
   description: string;
   notes: string | null;
   illustrationUrl: string | null;
   illustrationKey?: string | null;
+  animationStatus: string | null;
+  animationOperationId?: string | null;
+  animationUrl: string | null;
+  animationKey?: string | null;
+  animationError: string | null;
+  position: number;
 };
 
-async function resolveStepIllustrations(steps: DbPlanStep[]) {
+async function resolveStepAssets(steps: DbPlanStep[]) {
   return Promise.all(
     steps.map(async (step) => {
-      if (!step.illustrationKey) {
-        return step;
-      }
+      const [illustrationUrl, animationUrl] = await Promise.all([
+        (async () => {
+          if (!step.illustrationKey) {
+            return step.illustrationUrl;
+          }
 
-      try {
-        const fetchedUrl = await downloadObjectAsDataUrl({
-          key: step.illustrationKey,
-        });
-        return {
-          ...step,
-          illustrationUrl: fetchedUrl,
-        };
-      } catch (error) {
-        console.error(
-          `Failed to load illustration for step ${step.id ?? "unknown"}`,
-          error
-        );
-        return step;
-      }
+          try {
+            return await downloadObjectAsDataUrl({
+              key: step.illustrationKey,
+            });
+          } catch (error) {
+            console.error(
+              `Failed to load illustration for step ${step.id ?? "unknown"}`,
+              error
+            );
+            return step.illustrationUrl;
+          }
+        })(),
+        (async () => {
+          if (!step.animationKey) {
+            return step.animationUrl;
+          }
+
+          try {
+            return await getSignedObjectUrl({
+              key: step.animationKey,
+            });
+          } catch (error) {
+            console.error(
+              `Failed to create signed URL for animation ${step.id ?? "unknown"}`,
+              error
+            );
+            return null;
+          }
+        })(),
+      ]);
+
+      return {
+        ...step,
+        illustrationUrl: illustrationUrl ?? null,
+        animationUrl: animationUrl ?? null,
+      };
     })
   );
 }
@@ -171,6 +202,7 @@ function buildOnboardingSteps(
 
   if (checklist.length > 0) {
     onboardingSteps.push({
+      databaseId: null,
       id: -1,
       title: "Supplies & tools",
       description:
@@ -182,11 +214,18 @@ function buildOnboardingSteps(
 
   onboardingSteps.push(
     ...steps.map((step, index) => ({
+      databaseId: step.databaseId,
       id: resolveStepId(step.id, index),
       title: step.title,
       description: step.description,
       notes: step.notes ?? null,
       illustrationUrl: step.illustrationUrl,
+      animationStatus:
+        (step.animationStatus as StepAnimationStatus | null) ?? null,
+      animationOperationId: step.animationOperationId ?? null,
+      animationUrl: step.animationUrl,
+      animationError: step.animationError ?? null,
+      position: step.position,
     }))
   );
 

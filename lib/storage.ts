@@ -5,6 +5,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 type StorageConfig = {
   accessKey: string;
@@ -221,4 +222,61 @@ export function uploadDataUrlImage(
     body: buffer,
     contentType: mimeType,
   });
+}
+
+export async function uploadVideoBuffer({
+  buffer,
+  mimeType,
+  prefix = "plan-animations",
+}: {
+  buffer: Buffer;
+  mimeType?: string;
+  prefix?: string;
+}) {
+  const contentType = mimeType ?? "video/mp4";
+  const extension = contentType.split("/")[1] ?? "mp4";
+  const key = `${prefix}/${randomUUID()}.${extension.replace(/[^a-z0-9.-]/gi, "")}`;
+
+  const stored = await uploadBufferToStorage({
+    key,
+    body: buffer,
+    contentType,
+  });
+
+  const signedUrl = await getSignedObjectUrl({
+    key: stored.key,
+  });
+
+  return {
+    ...stored,
+    signedUrl,
+  };
+}
+
+export async function getSignedObjectUrl({
+  key,
+  expiresInSeconds = 60 * 60,
+}: {
+  key: string;
+  expiresInSeconds?: number;
+}) {
+  if (!key) {
+    throw new Error("A non-empty storage key is required for signed URLs.");
+  }
+
+  const client = getClient();
+  const config = getConfig();
+
+  const normalizedKey = key.startsWith("/") ? key.slice(1) : key;
+
+  const url = await getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: normalizedKey,
+    }),
+    { expiresIn: expiresInSeconds }
+  );
+
+  return url;
 }

@@ -24,7 +24,9 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const deleted = await deletePlan(planId);
+    const numericPlanId = planId as number;
+
+    const deleted = await deletePlan(numericPlanId);
 
     if (!deleted) {
       return NextResponse.json(

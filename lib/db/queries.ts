@@ -1,5 +1,8 @@
 import { desc, eq, sql } from "drizzle-orm";
-import type { IllustratedAssemblyPlan } from "@/lib/assembly";
+import type {
+  IllustratedAssemblyPlan,
+  StepAnimationStatus,
+} from "@/lib/assembly";
 import { db } from "@/lib/db";
 import { type Plan, plans, steps, type Upload, uploads } from "@/lib/db/schema";
 
@@ -68,6 +71,11 @@ export type PlanStepInsert = {
   notes?: string | null;
   illustrationKey?: string | null;
   illustrationUrl?: string | null;
+  animationStatus?: string | null;
+  animationOperationId?: string | null;
+  animationKey?: string | null;
+  animationUrl?: string | null;
+  animationError?: string | null;
 };
 
 export async function createPlanRecord({
@@ -107,6 +115,11 @@ export async function createPlanRecord({
           notes: step.notes ?? null,
           illustrationKey: step.illustrationKey ?? null,
           illustrationUrl: step.illustrationUrl ?? null,
+          animationStatus: step.animationStatus ?? null,
+          animationOperationId: step.animationOperationId ?? null,
+          animationKey: step.animationKey ?? null,
+          animationUrl: step.animationUrl ?? null,
+          animationError: step.animationError ?? null,
         }))
       );
     }
@@ -218,6 +231,11 @@ export async function getPlanWithSteps(id: number) {
       notes: steps.notes,
       illustrationUrl: steps.illustrationUrl,
       illustrationKey: steps.illustrationKey,
+      animationStatus: steps.animationStatus,
+      animationOperationId: steps.animationOperationId,
+      animationUrl: steps.animationUrl,
+      animationKey: steps.animationKey,
+      animationError: steps.animationError,
       position: steps.position,
     })
     .from(steps)
@@ -242,13 +260,140 @@ export async function getPlanWithSteps(id: number) {
         : null,
     },
     steps: stepRows.map((row) => ({
+      databaseId: row.id,
       id: row.stepIdentifier ?? String(row.id),
       title: row.title,
       description: row.description,
       notes: row.notes ?? null,
       illustrationUrl: row.illustrationUrl ?? null,
       illustrationKey: row.illustrationKey ?? null,
+      animationStatus: row.animationStatus ?? null,
+      animationOperationId: row.animationOperationId ?? null,
+      animationUrl: row.animationUrl ?? null,
+      animationKey: row.animationKey ?? null,
+      animationError: row.animationError ?? null,
       position: row.position,
     })),
   };
+}
+
+export async function getStepByAnimationOperationId(operationId: string) {
+  const [row] = await db
+    .select({
+      id: steps.id,
+      planId: steps.planId,
+      stepIdentifier: steps.stepIdentifier,
+      animationStatus: steps.animationStatus,
+      animationUrl: steps.animationUrl,
+      animationKey: steps.animationKey,
+      animationError: steps.animationError,
+    })
+    .from(steps)
+    .where(eq(steps.animationOperationId, operationId))
+    .limit(1);
+
+  return row;
+}
+
+export async function updateStepAnimationByOperationId(
+  operationId: string,
+  {
+    status,
+    url,
+    key,
+    error,
+  }: {
+    status: StepAnimationStatus;
+    url?: string | null;
+    key?: string | null;
+    error?: string | null;
+  }
+) {
+  const [row] = await db
+    .update(steps)
+    .set({
+      animationStatus: status,
+      animationUrl: url ?? null,
+      animationKey: key ?? null,
+      animationError: error ?? null,
+    })
+    .where(eq(steps.animationOperationId, operationId))
+    .returning({
+      id: steps.id,
+      planId: steps.planId,
+      stepIdentifier: steps.stepIdentifier,
+      animationStatus: steps.animationStatus,
+      animationUrl: steps.animationUrl,
+      animationKey: steps.animationKey,
+      animationError: steps.animationError,
+    });
+
+  return row;
+}
+
+export async function getPlanStepForAnimation(stepId: number) {
+  const [row] = await db
+    .select({
+      id: steps.id,
+      planId: steps.planId,
+      stepIdentifier: steps.stepIdentifier,
+      title: steps.title,
+      description: steps.description,
+      notes: steps.notes,
+      illustrationKey: steps.illustrationKey,
+      illustrationUrl: steps.illustrationUrl,
+      position: steps.position,
+      animationStatus: steps.animationStatus,
+      animationOperationId: steps.animationOperationId,
+      planRequestSummary: plans.requestSummary,
+    })
+    .from(steps)
+    .innerJoin(plans, eq(steps.planId, plans.id))
+    .where(eq(steps.id, stepId))
+    .limit(1);
+
+  return row;
+}
+
+export async function countPlanSteps(planId: number): Promise<number> {
+  const [row] = await db
+    .select({
+      value: sql<number>`count(*)`,
+    })
+    .from(steps)
+    .where(eq(steps.planId, planId));
+
+  const countValue = row?.value ?? 0;
+
+  return typeof countValue === "number" ? countValue : Number(countValue) || 0;
+}
+
+export async function resetStepAnimationById(
+  stepId: number,
+  {
+    status,
+    operationId,
+  }: {
+    status: StepAnimationStatus;
+    operationId: string;
+  }
+) {
+  const [row] = await db
+    .update(steps)
+    .set({
+      animationStatus: status,
+      animationOperationId: operationId,
+      animationUrl: null,
+      animationKey: null,
+      animationError: null,
+    })
+    .where(eq(steps.id, stepId))
+    .returning({
+      id: steps.id,
+      planId: steps.planId,
+      animationStatus: steps.animationStatus,
+      animationOperationId: steps.animationOperationId,
+    });
+
+  return row;
 }

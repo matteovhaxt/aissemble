@@ -3,6 +3,8 @@ import {
   generateAssemblyPlan,
   generateStepIllustration,
   type IllustratedAssemblyPlan,
+  type StepAnimationStatus,
+  startStepAnimation,
 } from "@/lib/assembly";
 import {
   createPlanRecord,
@@ -139,14 +141,66 @@ async function buildIllustratedSteps({
   requestSummary: string;
 }): Promise<IllustratedAssemblyPlan["steps"]> {
   return await Promise.all(
-    steps.map(async (step, index) => ({
-      ...step,
-      illustration: await generateStepIllustration(step, index, totalSteps, {
-        attachmentDataUrl,
-        attachmentMimeType,
-        requestSummary,
-      }),
-    }))
+    steps.map(async (step, index) => {
+      const illustration = await generateStepIllustration(
+        step,
+        index,
+        totalSteps,
+        {
+          attachmentDataUrl,
+          attachmentMimeType,
+          requestSummary,
+        }
+      );
+
+      let animationStatus: StepAnimationStatus | null = null;
+      let animationOperationId: string | null = null;
+      let animationError: string | null = null;
+
+      const shouldAnimate = Boolean(illustration) && index === 0;
+
+      if (shouldAnimate) {
+        try {
+          const { operationId } = await startStepAnimation({
+            step,
+            index,
+            totalSteps,
+            context: {
+              attachmentDataUrl,
+              attachmentMimeType,
+              requestSummary,
+            },
+            illustration,
+          });
+          animationStatus = "processing";
+          animationOperationId = operationId;
+          animationError = null;
+        } catch (error) {
+          animationStatus = "failed";
+          console.error(
+            `Failed to start animation for step ${step.id ?? `index-${index}`}`,
+            error
+          );
+          animationError =
+            error instanceof Error
+              ? error.message
+              : "Failed to start Veo animation.";
+        }
+      } else if (!illustration) {
+        animationStatus = "failed";
+        animationError = "Step illustration was not generated.";
+      }
+
+      return {
+        ...step,
+        illustration: illustration ?? undefined,
+        animationStatus,
+        animationOperationId,
+        animationUrl: null,
+        animationKey: null,
+        animationError,
+      };
+    })
   );
 }
 
@@ -168,6 +222,11 @@ async function persistStepIllustrations(
             notes: step.notes ?? null,
             illustrationKey: null,
             illustrationUrl: step.illustration ?? null,
+            animationStatus: step.animationStatus ?? null,
+            animationOperationId: step.animationOperationId ?? null,
+            animationKey: step.animationKey ?? null,
+            animationUrl: step.animationUrl ?? null,
+            animationError: step.animationError ?? null,
           } satisfies PlanStepInsert,
         };
       }
@@ -186,6 +245,11 @@ async function persistStepIllustrations(
           notes: step.notes ?? null,
           illustrationKey: stored.key,
           illustrationUrl: stored.url,
+          animationStatus: step.animationStatus ?? null,
+          animationOperationId: step.animationOperationId ?? null,
+          animationKey: step.animationKey ?? null,
+          animationUrl: step.animationUrl ?? null,
+          animationError: step.animationError ?? null,
         } satisfies PlanStepInsert,
       };
     })
