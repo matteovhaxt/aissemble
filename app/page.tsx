@@ -1,8 +1,17 @@
 "use client";
 
+import { formatDistanceToNow } from "date-fns";
 import { Paperclip, Send } from "lucide-react";
 import Image from "next/image";
-import { type ChangeEvent, useCallback, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,13 +20,22 @@ import type { IllustratedAssemblyPlan } from "@/lib/assembly";
 export default function AssemblyInputPage() {
   const [request, setRequest] = useState("");
   const [attachment, setAttachment] = useState<File | null>(null);
-  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(
-    null
-  );
+  const [uploadedAttachment, setUploadedAttachment] = useState<{
+    fileId: string;
+    url: string;
+    mimeType: string;
+    name: string;
+    key: string;
+    id: number;
+  } | null>(null);
   const [plan, setPlan] = useState<IllustratedAssemblyPlan | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [plansList, setPlansList] = useState<StoredPlanSummary[]>([]);
+  const [plansError, setPlansError] = useState<string | null>(null);
+  const [isLoadingPlans, setIsLoadingPlans] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const router = useRouter();
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const [file] = event.target.files ?? [];
@@ -25,37 +43,135 @@ export default function AssemblyInputPage() {
 
     if (!file) {
       setAttachment(null);
-      setAttachmentPreview(null);
       return;
     }
 
     if (!file.type.startsWith("image/")) {
       setError("Only image files are supported.");
       setAttachment(null);
-      setAttachmentPreview(null);
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result === "string") {
-        setAttachment(file);
-        setAttachmentPreview(result);
-        setError("");
-      } else {
-        setError("Could not read the selected file.");
-        setAttachment(null);
-        setAttachmentPreview(null);
-      }
-    };
-    reader.onerror = () => {
-      setError("Could not read the selected file.");
-      setAttachment(null);
-      setAttachmentPreview(null);
-    };
-    reader.readAsDataURL(file);
+    setAttachment(file);
+    setUploadedAttachment(null);
+    setError("");
   };
+
+  const getFileIdentifier = useCallback(
+    (file: File) => `${file.name}:${file.size}:${file.lastModified}`,
+    []
+  );
+
+  const uploadAttachment = useCallback(async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/uploads", {
+      method: "POST",
+      body: formData,
+    });
+
+    const data = (await response.json()) as {
+      id?: number;
+      url?: string;
+      key?: string;
+      contentType?: string;
+      error?: string;
+    };
+
+    if (
+      !(
+        response.ok &&
+        data.url &&
+        data.key &&
+        typeof data.id === "number" &&
+        Number.isInteger(data.id)
+      )
+    ) {
+      throw new Error(data.error ?? "Failed to upload attachment.");
+    }
+
+    return {
+      id: data.id,
+      url: data.url,
+      key: data.key,
+      contentType: data.contentType ?? file.type,
+    };
+  }, []);
+
+  const resolveAttachmentUpload = useCallback(
+    async (file: File | null) => {
+      if (!file) {
+        setUploadedAttachment(null);
+        return {
+          url: null,
+          mimeType: null,
+          name: null,
+          key: null,
+          uploadId: null,
+        };
+      }
+
+      const fileId = getFileIdentifier(file);
+
+      if (uploadedAttachment && uploadedAttachment.fileId === fileId) {
+        return {
+          url: uploadedAttachment.url,
+          mimeType: uploadedAttachment.mimeType,
+          name: uploadedAttachment.name,
+          key: uploadedAttachment.key,
+          uploadId: uploadedAttachment.id,
+        };
+      }
+
+      const uploaded = await uploadAttachment(file);
+      const nextUploadedAttachment = {
+        fileId,
+        url: uploaded.url,
+        mimeType: uploaded.contentType,
+        name: file.name,
+        key: uploaded.key,
+        id: uploaded.id,
+      };
+
+      setUploadedAttachment(nextUploadedAttachment);
+
+      return {
+        url: nextUploadedAttachment.url,
+        mimeType: nextUploadedAttachment.mimeType,
+        name: nextUploadedAttachment.name,
+        key: nextUploadedAttachment.key,
+        uploadId: nextUploadedAttachment.id,
+      };
+    },
+    [getFileIdentifier, uploadAttachment, uploadedAttachment]
+  );
+
+  const loadPlans = useCallback(async () => {
+    setIsLoadingPlans(true);
+    setPlansError(null);
+    try {
+      const response = await fetch("/api/plans");
+      const data = (await response.json()) as {
+        plans?: StoredPlanSummary[];
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to load plans.");
+      }
+      setPlansList(data.plans ?? []);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load plans.";
+      setPlansError(message);
+    } finally {
+      setIsLoadingPlans(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPlans();
+  }, [loadPlans]);
 
   const handleSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -71,11 +187,21 @@ export default function AssemblyInputPage() {
       setPlan(null);
 
       try {
+        const {
+          url: attachmentUrl,
+          mimeType: attachmentMimeType,
+          name: attachmentName,
+          key: attachmentKey,
+          uploadId: attachmentUploadId,
+        } = await resolveAttachmentUpload(attachment);
+
         const response = await fetch("/api/chat", {
           body: JSON.stringify({
-            attachmentDataUrl: attachmentPreview,
-            attachmentMimeType: attachment?.type,
-            attachmentName: attachment?.name ?? null,
+            attachmentUrl,
+            attachmentMimeType,
+            attachmentName,
+            attachmentKey,
+            attachmentUploadId,
             request: trimmed,
           }),
           headers: {
@@ -91,11 +217,20 @@ export default function AssemblyInputPage() {
 
         const data = (await response.json()) as {
           plan: IllustratedAssemblyPlan;
+          planId?: number;
         };
-        setPlan(data.plan);
+
+        if (!Number.isInteger(data.planId)) {
+          throw new Error(
+            "Plan was generated but its identifier is missing. Please try again."
+          );
+        }
+
         setAttachment(null);
-        setAttachmentPreview(null);
+        setUploadedAttachment(null);
         setRequest("");
+        await loadPlans();
+        router.push(`/plan?id=${data.planId}`);
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Something went wrong.";
@@ -104,7 +239,7 @@ export default function AssemblyInputPage() {
         setIsLoading(false);
       }
     },
-    [attachment, attachmentPreview, request]
+    [attachment, request, resolveAttachmentUpload, loadPlans, router]
   );
 
   return (
@@ -114,7 +249,7 @@ export default function AssemblyInputPage() {
           onReset={() => {
             setPlan(null);
             setAttachment(null);
-            setAttachmentPreview(null);
+            setUploadedAttachment(null);
             setError("");
           }}
           plan={plan}
@@ -165,6 +300,12 @@ export default function AssemblyInputPage() {
           {error ? <p className="text-destructive text-sm">{error}</p> : null}
         </form>
       )}
+      <PlanList
+        className="mt-12 w-full max-w-3xl"
+        error={plansError}
+        isLoading={isLoadingPlans}
+        plans={plansList}
+      />
     </div>
   );
 }
@@ -235,5 +376,69 @@ function AssemblyFlow({ onReset, plan }: AssemblyFlowProps) {
         Start a new plan
       </Button>
     </div>
+  );
+}
+
+type StoredPlanSummary = {
+  id: number;
+  requestSummary: string;
+  project: string | null;
+  createdAt: string;
+  stepsCount: number;
+  upload?: {
+    id: number;
+    name: string | null;
+    url: string | null;
+    mimeType: string | null;
+  } | null;
+};
+
+type PlanListProps = {
+  plans: StoredPlanSummary[];
+  isLoading: boolean;
+  error: string | null;
+  className?: string;
+};
+
+function PlanList({ plans, isLoading, error, className }: PlanListProps) {
+  return (
+    <section className={className}>
+      <div className="flex items-center justify-between">
+        {isLoading ? <Spinner className="size-4" /> : null}
+      </div>
+      {error ? <p className="mt-2 text-destructive text-sm">{error}</p> : null}
+      {plans.length === 0 && !isLoading && !error ? (
+        <p className="mt-4 text-center text-muted-foreground text-sm">
+          Plans you generate will appear here.
+        </p>
+      ) : null}
+      <ul className="mt-4 space-y-2">
+        {plans.map((planItem) => {
+          const createdLabel = formatDistanceToNow(
+            new Date(planItem.createdAt),
+            {
+              addSuffix: true,
+            }
+          );
+
+          return (
+            <li key={planItem.id}>
+              <Link
+                className="flex flex-col gap-1 rounded-md px-3 py-2 text-sm hover:bg-muted/60"
+                href={`/plan?id=${planItem.id}`}
+              >
+                <span className="font-medium">
+                  {planItem.project ?? planItem.requestSummary}
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  Created {createdLabel} · {planItem.stepsCount} steps
+                  {planItem.upload?.url ? " · Attachment available" : ""}
+                </span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
