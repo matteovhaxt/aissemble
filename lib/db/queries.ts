@@ -175,6 +175,15 @@ export async function listPlans(limit = 20): Promise<
   }));
 }
 
+export async function deletePlan(planId: number): Promise<boolean> {
+  const deleted = await db
+    .delete(plans)
+    .where(eq(plans.id, planId))
+    .returning({ id: plans.id });
+
+  return deleted.length > 0;
+}
+
 export async function getPlanWithSteps(id: number) {
   const planRows = await db
     .select({
@@ -184,6 +193,7 @@ export async function getPlanWithSteps(id: number) {
       checklist: plans.checklist,
       createdAt: plans.createdAt,
       uploadId: uploads.id,
+      uploadKey: uploads.key,
       uploadName: uploads.name,
       uploadUrl: uploads.url,
       uploadMimeType: uploads.mimeType,
@@ -224,6 +234,7 @@ export async function getPlanWithSteps(id: number) {
       upload: planRow.uploadId
         ? {
             id: planRow.uploadId,
+            key: planRow.uploadKey ?? null,
             name: planRow.uploadName ?? null,
             url: planRow.uploadUrl ?? null,
             mimeType: planRow.uploadMimeType ?? null,

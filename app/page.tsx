@@ -1,7 +1,7 @@
 "use client";
 
 import { formatDistanceToNow } from "date-fns";
-import { Paperclip, Send } from "lucide-react";
+import { ChevronDown, Paperclip, Send, Trash } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -13,6 +13,11 @@ import {
   useState,
 } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import type { IllustratedAssemblyPlan } from "@/lib/assembly";
@@ -34,6 +39,8 @@ export default function AssemblyInputPage() {
   const [plansList, setPlansList] = useState<StoredPlanSummary[]>([]);
   const [plansError, setPlansError] = useState<string | null>(null);
   const [isLoadingPlans, setIsLoadingPlans] = useState(false);
+  const [deletingPlanId, setDeletingPlanId] = useState<number | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const router = useRouter();
 
@@ -173,6 +180,37 @@ export default function AssemblyInputPage() {
     loadPlans();
   }, [loadPlans]);
 
+  const handleDeletePlan = useCallback(
+    async (planId: number) => {
+      setPlansError(null);
+      setDeletingPlanId(planId);
+
+      try {
+        const response = await fetch("/api/plans", {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ id: planId }),
+        });
+
+        if (!response.ok) {
+          const data = (await response.json()) as { error?: string };
+          throw new Error(data.error ?? "Failed to delete plan.");
+        }
+
+        await loadPlans();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to delete plan.";
+        setPlansError(message);
+      } finally {
+        setDeletingPlanId(null);
+      }
+    },
+    [loadPlans]
+  );
+
   const handleSubmit = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -256,7 +294,7 @@ export default function AssemblyInputPage() {
         />
       ) : (
         <form
-          className="flex w-full max-w-2xl flex-col gap-4"
+          className="flex w-full max-w-3xl flex-col gap-4"
           onSubmit={handleSubmit}
         >
           <div className="flex items-center gap-2">
@@ -300,12 +338,46 @@ export default function AssemblyInputPage() {
           {error ? <p className="text-destructive text-sm">{error}</p> : null}
         </form>
       )}
-      <PlanList
+      <Collapsible
         className="mt-12 w-full max-w-3xl"
-        error={plansError}
-        isLoading={isLoadingPlans}
-        plans={plansList}
-      />
+        onOpenChange={setIsHistoryOpen}
+        open={isHistoryOpen}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm tracking-wide">History</span>
+            {isLoadingPlans ? <Spinner className="size-3" /> : null}
+            {plansError ? (
+              <span className="text-destructive text-xs">Error loading</span>
+            ) : null}
+          </div>
+          <CollapsibleTrigger asChild>
+            <Button
+              aria-label={isHistoryOpen ? "Collapse history" : "Expand history"}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <ChevronDown
+                aria-hidden="true"
+                className={`size-4 transition-transform ${
+                  isHistoryOpen ? "rotate-180" : ""
+                }`}
+              />
+            </Button>
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent>
+          <PlanList
+            className="mt-4"
+            deletingPlanId={deletingPlanId}
+            error={plansError}
+            isLoading={isLoadingPlans}
+            onDelete={handleDeletePlan}
+            plans={plansList}
+          />
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }
@@ -397,15 +469,21 @@ type PlanListProps = {
   plans: StoredPlanSummary[];
   isLoading: boolean;
   error: string | null;
+  deletingPlanId: number | null;
+  onDelete: (planId: number) => void;
   className?: string;
 };
 
-function PlanList({ plans, isLoading, error, className }: PlanListProps) {
+function PlanList({
+  plans,
+  isLoading,
+  error,
+  deletingPlanId,
+  onDelete,
+  className,
+}: PlanListProps) {
   return (
     <section className={className}>
-      <div className="flex items-center justify-between">
-        {isLoading ? <Spinner className="size-4" /> : null}
-      </div>
       {error ? <p className="mt-2 text-destructive text-sm">{error}</p> : null}
       {plans.length === 0 && !isLoading && !error ? (
         <p className="mt-4 text-center text-muted-foreground text-sm">
@@ -423,18 +501,35 @@ function PlanList({ plans, isLoading, error, className }: PlanListProps) {
 
           return (
             <li key={planItem.id}>
-              <Link
-                className="flex flex-col gap-1 rounded-md px-3 py-2 text-sm hover:bg-muted/60"
-                href={`/plan?id=${planItem.id}`}
-              >
-                <span className="font-medium">
-                  {planItem.project ?? planItem.requestSummary}
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  Created {createdLabel} · {planItem.stepsCount} steps
-                  {planItem.upload?.url ? " · Attachment available" : ""}
-                </span>
-              </Link>
+              <div className="flex items-center justify-between gap-3 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted/60">
+                <Link
+                  className="flex flex-col gap-1"
+                  href={`/plan?id=${planItem.id}`}
+                >
+                  <span className="font-medium">
+                    {planItem.project ?? planItem.requestSummary}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    Created {createdLabel} · {planItem.stepsCount} steps
+                    {planItem.upload?.url ? " · Attachment available" : ""}
+                  </span>
+                </Link>
+                <Button
+                  aria-label={`Delete ${planItem.project ?? planItem.requestSummary}`}
+                  className="hover:text-destructive"
+                  disabled={deletingPlanId === planItem.id || isLoading}
+                  onClick={() => onDelete(planItem.id)}
+                  size="icon"
+                  type="button"
+                  variant="destructive"
+                >
+                  {deletingPlanId === planItem.id ? (
+                    <Spinner className="size-4" />
+                  ) : (
+                    <Trash aria-hidden="true" className="size-4" />
+                  )}
+                </Button>
+              </div>
             </li>
           );
         })}
